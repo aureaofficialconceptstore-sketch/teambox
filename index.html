@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TeamBox — il tuo spazio di lavoro</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="auth.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Navigazione">
+        <div class="workspace-switcher">
+          <div class="workspace-mark">T</div>
+          <div><strong>TeamBox</strong><span>Il tuo workspace</span></div>
+          <button class="icon-button" aria-label="Menu workspace">⌄</button>
+        </div>
+
+        <button class="new-message" id="new-message">✦ <span>Nuovo messaggio</span></button>
+
+        <nav>
+          <p class="nav-label">PERSONALE</p>
+          <a class="nav-link active" href="#chat"><span>▣</span> Chat <b id="unread-count">3</b></a>
+          <a class="nav-link" href="#mentions"><span>@</span> Menzioni</a>
+          <a class="nav-link" href="#saved"><span>♧</span> Salvati</a>
+
+          <div class="section-heading"><p>CANALI</p><button id="add-channel" aria-label="Aggiungi canale">＋</button></div>
+          <div id="channels" class="channels"></div>
+
+          <div class="section-heading"><p>MESSAGGI DIRETTI</p><button aria-label="Nuovo messaggio diretto">＋</button></div>
+          <div class="direct-messages">
+            <button class="dm"><i class="presence online"></i><span class="avatar small coral">A</span> Anna Bianchi</button>
+            <button class="dm"><i class="presence online"></i><span class="avatar small blue">L</span> Luca Rinaldi</button>
+            <button class="dm"><i class="presence away"></i><span class="avatar small gold">S</span> Sofia Conti</button>
+          </div>
+        </nav>
+
+        <div class="profile"><span class="avatar violet">C</span><div><strong>Camilla</strong><span><i class="presence online"></i> Disponibile</span></div><button class="icon-button" aria-label="Profilo">⋮</button></div>
+      </aside>
+
+      <main class="conversation" id="chat">
+        <header class="channel-header">
+          <div><h1><span>#</span> <span id="channel-title">generale</span></h1><p id="channel-description">Comunicazioni e aggiornamenti per tutto il team</p></div>
+          <div class="header-actions"><button class="member-stack" aria-label="4 membri"><span class="avatar tiny coral">A</span><span class="avatar tiny blue">L</span><span class="avatar tiny gold">S</span><span class="avatar tiny violet">C</span></button><button class="icon-button bordered" aria-label="Cerca">⌕</button><button class="icon-button bordered" aria-label="Dettagli canale">ⓘ</button></div>
+        </header>
+
+        <section class="messages" id="messages" aria-live="polite"></section>
+        <div class="typing" id="typing"><span></span><span></span><span></span> Anna sta scrivendo…</div>
+        <form class="composer" id="composer">
+          <button type="button" class="icon-button" id="attach" aria-label="Allega file">＋</button>
+          <input id="message-input" autocomplete="off" placeholder="Scrivi in #generale" aria-label="Messaggio" />
+          <button type="button" class="emoji" id="emoji" aria-label="Aggiungi emoji">☺</button>
+          <button type="submit" class="send" aria-label="Invia messaggio">↑</button>
+        </form>
+        <p class="composer-help">Premi <kbd>Invio</kbd> per inviare · <kbd>Shift + Invio</kbd> per una nuova riga</p>
+      </main>
+
+      <aside class="right-panel">
+        <div class="panel-title"><h2>Oggi</h2><span id="today"></span></div>
+        <article class="focus-card"><span class="sparkle">✦</span><p class="eyebrow">IN EVIDENZA</p><h3>Benvenuti su TeamBox!</h3><p>Questo è il posto in cui il lavoro prende vita. Iniziate da qui.</p><button id="welcome-action">Scopri di più <span>→</span></button></article>
+        <section class="panel-section"><div class="panel-title"><h2>Attività recenti</h2><button class="text-button">Vedi tutto</button></div><div id="activity" class="activity"></div></section>
+        <section class="panel-section team-section"><div class="panel-title"><h2>Il tuo team</h2><button class="text-button">Gestisci</button></div><div class="team"><div><span class="avatar coral">A</span><p><strong>Anna Bianchi</strong><span><i class="presence online"></i> Online</span></p></div><div><span class="avatar blue">L</span><p><strong>Luca Rinaldi</strong><span><i class="presence online"></i> Online</span></p></div><div><span class="avatar gold">S</span><p><strong>Sofia Conti</strong><span><i class="presence away"></i> Assente</span></p></div></div></section>
+      </aside>
+    </div>
+    <dialog id="channel-dialog"><form method="dialog"><button class="close" value="cancel">×</button><p class="eyebrow">NUOVO CANALE</p><h2>Crea uno spazio per il team</h2><label>Nome del canale<input id="channel-name" required placeholder="es. progetto-sito" /></label><label>Descrizione (facoltativa)<input id="channel-desc" placeholder="Di cosa parlerete?" /></label><button class="create" id="create-channel" value="default">Crea canale</button></form></dialog>
+    <section class="auth-screen" id="auth-screen" aria-live="polite">
+      <form class="auth-card" id="auth-form">
+        <div class="auth-logo">T</div>
+        <p class="eyebrow">TEAMBOX</p>
+        <h2 id="auth-title">Accedi al tuo team</h2>
+        <p class="auth-copy" id="auth-copy">Usa l’indirizzo email e la password del tuo account.</p>
+        <label class="auth-name-field">Il tuo nome<input id="auth-name" autocomplete="name" placeholder="Es. Camilla Rossi" maxlength="40" /></label>
+        <label id="auth-email-field">Email<input id="auth-email" type="email" autocomplete="email" placeholder="nome@azienda.it" required /></label>
+        <label>Password<input id="auth-password" type="password" autocomplete="current-password" minlength="8" placeholder="Almeno 8 caratteri" required /></label>
+        <p class="auth-error" id="auth-error" role="alert"></p>
+        <button class="auth-submit" id="auth-submit" type="submit">Accedi</button>
+        <button class="auth-switch" id="auth-switch" type="button">Non hai un account? Registrati</button>
+      </form>
+    </section>
+    <script src="config.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

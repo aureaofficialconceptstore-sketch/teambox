@@ -1,0 +1,4 @@
+# Dati e cache solo locali: non vengono mai pubblicati.
+teambox.db
+__pycache__/
+.DS_Store
