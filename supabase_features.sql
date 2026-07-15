@@ -120,6 +120,24 @@ create table if not exists public.channel_members (
   primary key (channel_id, profile_id)
 );
 
+-- Ogni nuovo membro vede subito il canale generale; gli altri canali restano
+-- selezionabili dal loro creatore nella finestra "People in channel".
+create or replace function public.create_profile_for_new_user()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.profiles (id, display_name, avatar_color)
+  values (new.id, coalesce(nullif(new.raw_user_meta_data ->> 'display_name', ''), split_part(new.email, '@', 1)), 'violet')
+  on conflict (id) do nothing;
+
+  insert into public.channel_members (channel_id, profile_id, added_by)
+  select channel.id, new.id, null
+  from public.channels channel
+  where lower(channel.slug) in ('general', 'generale')
+  on conflict do nothing;
+  return new;
+end;
+$$;
+
 alter table public.channel_members enable row level security;
 
 create or replace function public.is_channel_member(target_channel_id bigint)

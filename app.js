@@ -64,7 +64,12 @@ function showToast(message) {
 }
 function showApp() { authScreen.classList.add('hidden'); }
 function showAuth() { authScreen.classList.remove('hidden'); }
-function showError(error) { console.error(error); showToast(error?.message || 'That could not be completed. Please try again.'); }
+function showError(error) {
+  console.error(error);
+  showToast(isMissingFeature(error)
+    ? 'This feature needs the workspace database update. Run supabase_features.sql once, then refresh.'
+    : error?.message || 'That could not be completed. Please try again.');
+}
 function setAuthMode(signup) {
   if (signup && !config.allowSelfSignup) return;
   inviteMode = false;
@@ -185,7 +190,10 @@ async function currentMembers() {
   if (!current) return [];
   if (current.kind === 'direct') return [teamProfiles.find(profile => profile.id === user.id), current.partner].filter(Boolean);
   const { data, error } = await client.from('channel_members').select('profile:profiles(id, display_name, avatar_color)').eq('channel_id', current.id);
-  if (error) throw error;
+  if (error) {
+    if (isMissingFeature(error)) return teamProfiles;
+    throw error;
+  }
   return (data || []).map(row => row.profile).filter(Boolean);
 }
 async function renderCurrentMembers(showDialog = false) {
@@ -225,6 +233,10 @@ function setHeader() {
     title.textContent = 'no-channel';
     desc.textContent = 'Create a channel to get started.';
     input.placeholder = 'Create a channel to start writing';
+    $('#start-call').disabled = true;
+    $('#start-call').title = 'Choose a conversation before starting a video call';
+    $('#open-canvas').disabled = true;
+    $('#open-canvas').title = 'Open a private chat to use the shared canvas';
     return;
   }
   const isChannel = current.kind === 'channel';
@@ -232,8 +244,8 @@ function setHeader() {
   title.textContent = isChannel ? current.slug : current.partner.display_name;
   desc.textContent = isChannel ? (current.description || 'Team channel') : 'Direct message';
   input.placeholder = isChannel ? `Write in #${current.slug}` : `Write to ${current.partner.display_name}`;
-  $('#start-call').disabled = !isChannel;
-  $('#start-call').title = isChannel ? 'Start a channel video call' : 'Video calls start from a channel';
+  $('#start-call').disabled = false;
+  $('#start-call').title = isChannel ? 'Start a channel video call' : 'Start a private video call';
   $('#open-canvas').disabled = isChannel;
   $('#open-canvas').title = isChannel ? 'Canvas is available in private chats' : 'Open shared canvas';
 }
@@ -345,9 +357,12 @@ async function uploadFile(file) {
   await renderActivity();
 }
 async function openAttachment(path) {
+  const attachmentWindow = window.open('', '_blank');
+  if (!attachmentWindow) throw new Error('Your browser blocked the file window. Allow pop-ups for TeamBox and try again.');
+  attachmentWindow.opener = null;
   const { data, error } = await client.storage.from('teambox-files').createSignedUrl(path, 60);
-  if (error) throw error;
-  window.open(data.signedUrl, '_blank', 'noopener');
+  if (error) { attachmentWindow.close(); throw error; }
+  attachmentWindow.location.href = data.signedUrl;
 }
 async function openDirect(profileId) {
   const profile = teamProfiles.find(member => member.id === profileId);
@@ -368,18 +383,19 @@ async function runSearch() {
     : '<p class="empty-list">No messages found.</p>';
 }
 function startCall() {
-  if (!current || current.kind !== 'channel') return;
+  if (!current) { showToast('Choose a channel or private chat before starting a video call.'); return; }
   const project = new URL(config.supabaseUrl).hostname.split('.')[0].replace(/[^a-z0-9]/gi, '');
-  const room = `AureaTeam-${project}-${current.id}`;
-  window.open(`https://meet.jit.si/${encodeURIComponent(room)}`, '_blank', 'noopener');
+  const room = `AureaTeam-${project}-${current.kind}-${current.id}`;
+  const callWindow = window.open(`https://meet.jit.si/${encodeURIComponent(room)}`, '_blank', 'noopener');
+  if (!callWindow) showToast('Your browser blocked the call window. Allow pop-ups for TeamBox and try again.');
 }
 function makeCanvasTable() {
-  return { id: crypto.randomUUID(), cells: [['Titolo 1', 'Titolo 2', 'Titolo 3'], ['', '', ''], ['', '', '']] };
+  return { id: crypto.randomUUID(), cells: [['Header 1', 'Header 2', 'Header 3'], ['', '', ''], ['', '', '']] };
 }
 function normaliseCanvas(content) {
   const tables = Array.isArray(content?.tables) ? content.tables.map(table => ({
     id: table.id || crypto.randomUUID(),
-    cells: Array.isArray(table.cells) && table.cells.length ? table.cells.map(row => Array.isArray(row) ? row.map(cell => String(cell ?? '')) : ['']) : [['Titolo 1', 'Titolo 2', 'Titolo 3'], ['', '', ''], ['', '', '']]
+    cells: Array.isArray(table.cells) && table.cells.length ? table.cells.map(row => Array.isArray(row) ? row.map(cell => String(cell ?? '')) : ['']) : [['Header 1', 'Header 2', 'Header 3'], ['', '', ''], ['', '', '']]
   })) : [];
   return { notes: String(content?.notes || ''), tables };
 }
@@ -643,7 +659,11 @@ $('#create-channel').addEventListener('click', async event => {
     subscribeToMessages();
   } catch (error) { showError(error); }
 });
-$('#new-message').addEventListener('click', () => input.focus());
+async function openDirectPicker() {
+  await renderTeam();
+  directDialog.showModal();
+}
+$('#new-message').addEventListener('click', () => openDirectPicker().catch(showError));
 $('#open-calendar').addEventListener('click', () => openCalendar().catch(showError));
 $('#calendar-previous').addEventListener('click', async () => { calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() - 1, 1); await fetchCalendarEvents().catch(showError); });
 $('#calendar-next').addEventListener('click', async () => { calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() + 1, 1); await fetchCalendarEvents().catch(showError); });
@@ -680,9 +700,7 @@ messagesEl.addEventListener('click', event => {
   const button = event.target.closest('[data-file-path]');
   if (button) openAttachment(decodeURIComponent(button.dataset.filePath)).catch(showError);
 });
-$('#add-direct').addEventListener('click', async () => {
-  try { await renderTeam(); directDialog.showModal(); } catch (error) { showError(error); }
-});
+$('#add-direct').addEventListener('click', () => openDirectPicker().catch(showError));
 $('#member-picker').addEventListener('click', event => {
   const button = event.target.closest('[data-profile]');
   if (button) openDirect(button.dataset.profile).catch(showError);
