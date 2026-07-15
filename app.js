@@ -37,6 +37,7 @@ let canvasDoc = { notes: '', tables: [] };
 let calendarCursor = new Date();
 let calendarEvents = [];
 let calendarLocalOnly = false;
+let mediaRecorder, recordingStream, audioChunks = [];
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
 const toSlug = value => value.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -51,7 +52,7 @@ const relativeTime = value => {
 };
 const avatarColor = id => ['coral', 'blue', 'gold', 'violet'][[...String(id)].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 4];
 const byteSize = value => value < 1024 * 1024 ? `${Math.max(1, Math.round(value / 1024))} KB` : `${(value / (1024 * 1024)).toFixed(1)} MB`;
-const isMissingFeature = error => /direct_thread|message_attachment|channel_members|direct_canvases|calendar_events|create_team_channel|add_channel_members|teambox-files|relation .* does not exist|schema cache/i.test(error?.message || '');
+const isMissingFeature = error => /direct_thread|direct_message_attachments|message_attachment|channel_members|direct_canvases|calendar_events|create_team_channel|add_channel_members|teambox-files|edited_at|relation .* does not exist|schema cache|column .* does not exist/i.test(error?.message || '');
 const authRedirectUrl = () => `${window.location.origin}${window.location.pathname}`;
 
 function showAuthError(message = '') { authError.textContent = message; }
@@ -118,6 +119,15 @@ function memberMarkup(profile, selectable = false) {
   const type = isAction ? ' type="button"' : '';
   return `<${tag}${type} class="member-row"${action}><span class="avatar ${escapeHtml(profile.avatar_color || 'violet')}">${escapeHtml(initials(profile.display_name))}</span><span><strong>${name}</strong><small>${detail}</small></span>${isAction ? '<span class="member-row-action">Message</span>' : ''}</${tag}>`;
 }
+function renderDirectPicker() {
+  const term = ($('#direct-search')?.value || '').trim().toLowerCase();
+  const people = teamProfiles.filter(profile => profile.id !== user?.id && profile.display_name.toLowerCase().includes(term));
+  $('#member-picker').innerHTML = people.length
+    ? people.map(profile => memberMarkup(profile, true)).join('')
+    : teamProfiles.some(profile => profile.id !== user?.id)
+      ? '<p class="empty-list">No team member matches that name.</p>'
+      : '<p class="empty-list">No one else has joined AUREA Team yet. Add a team member first, then they will appear here.</p>';
+}
 function renderUniversalSearch() {
   const results = $('#global-search-results');
   const term = channelFilter.trim();
@@ -136,9 +146,7 @@ async function renderTeam() {
   teamProfiles = data || [];
   $('#team-list').innerHTML = teamProfiles.length ? teamProfiles.slice(0, 5).map(profile => memberMarkup(profile)).join('') : '<p class="empty-list">No other members yet.</p>';
   $('#members-list').innerHTML = teamProfiles.length ? teamProfiles.map(profile => memberMarkup(profile)).join('') : '<p class="empty-list">No members found.</p>';
-  $('#member-picker').innerHTML = teamProfiles.filter(profile => profile.id !== user.id).length
-    ? teamProfiles.map(profile => memberMarkup(profile, true)).join('')
-    : '<p class="empty-list">Invite another person to the workspace before starting a private conversation.</p>';
+  renderDirectPicker();
   $('#channel-member-picker').innerHTML = teamProfiles.filter(profile => profile.id !== user.id).length
     ? teamProfiles.filter(profile => profile.id !== user.id).map(profile => `<label class="channel-member-option"><span class="avatar small ${escapeHtml(profile.avatar_color || 'violet')}">${escapeHtml(initials(profile.display_name))}</span><span>${escapeHtml(profile.display_name)}</span><input type="checkbox" data-channel-profile="${profile.id}" /></label>`).join('')
     : '<p class="empty-list">People will appear here after they join the workspace.</p>';
@@ -220,12 +228,19 @@ async function refreshCurrentMembers() {
   }
 }
 function attachmentMarkup(file) {
-  return `<button class="attachment" data-file-path="${encodeURIComponent(file.file_path)}"><span>↗</span><span><strong>${escapeHtml(file.file_name)}</strong><small>${byteSize(Number(file.byte_size || 0))}</small></span></button>`;
+  const path = encodeURIComponent(file.file_path);
+  if (String(file.mime_type || '').startsWith('audio/')) {
+    return `<div class="audio-attachment" data-audio-path="${path}"><span class="audio-mark">●</span><span><strong>${escapeHtml(file.file_name || 'Voice message')}</strong><small>${byteSize(Number(file.byte_size || 0))}</small></span><audio controls preload="metadata" aria-label="Voice message"></audio></div>`;
+  }
+  return `<button class="attachment" data-file-path="${path}"><span>↗</span><span><strong>${escapeHtml(file.file_name)}</strong><small>${byteSize(Number(file.byte_size || 0))}</small></span></button>`;
 }
 function messageMarkup(message) {
   const author = message.author || { display_name: 'Team member', avatar_color: 'violet' };
   const files = message.message_attachments || message.attachments || [];
-  return `<article class="message"><span class="avatar ${escapeHtml(author.avatar_color || 'violet')}">${escapeHtml(initials(author.display_name))}</span><div class="message-content"><div class="message-meta"><strong>${escapeHtml(author.display_name)}</strong><time>${messageTime(message.created_at)}</time></div><p>${escapeHtml(message.body)}</p>${files.length ? `<div class="attachments">${files.map(attachmentMarkup).join('')}</div>` : ''}</div></article>`;
+  const ownMessage = String(message.author_id) === String(user?.id);
+  const escapedBody = encodeURIComponent(message.body || '');
+  const actions = ownMessage ? `<span class="message-actions"><button type="button" class="message-action" data-edit-message="${message.id}" data-message-body="${escapedBody}">Edit</button><button type="button" class="message-action delete" data-delete-message="${message.id}">Delete</button></span>` : '';
+  return `<article class="message"><span class="avatar ${escapeHtml(author.avatar_color || 'violet')}">${escapeHtml(initials(author.display_name))}</span><div class="message-content"><div class="message-meta"><strong>${escapeHtml(author.display_name)}</strong><time>${messageTime(message.created_at)}</time>${message.edited_at ? '<em class="message-edited">edited</em>' : ''}${actions}</div><p>${escapeHtml(message.body)}</p>${files.length ? `<div class="attachments">${files.map(attachmentMarkup).join('')}</div>` : ''}</div></article>`;
 }
 function setHeader() {
   if (!current) {
@@ -250,10 +265,26 @@ function setHeader() {
   $('#open-canvas').title = isChannel ? 'Canvas is available in private chats' : 'Open shared canvas';
 }
 async function channelMessages() {
-  const withAttachments = await client.from('messages').select('id, body, created_at, author:profiles(display_name, avatar_color), message_attachments(id, file_name, file_path, mime_type, byte_size)').eq('channel_id', current.id).order('created_at');
+  const withAttachments = await client.from('messages').select('id, body, author_id, created_at, edited_at, author:profiles(display_name, avatar_color), message_attachments(id, file_name, file_path, mime_type, byte_size)').eq('channel_id', current.id).order('created_at');
   if (!withAttachments.error) return withAttachments;
   if (!isMissingFeature(withAttachments.error)) return withAttachments;
-  return client.from('messages').select('id, body, created_at, author:profiles(display_name, avatar_color)').eq('channel_id', current.id).order('created_at');
+  return client.from('messages').select('id, body, author_id, created_at, author:profiles(display_name, avatar_color)').eq('channel_id', current.id).order('created_at');
+}
+async function directMessages() {
+  const withAttachments = await client.from('direct_messages').select('id, body, author_id, created_at, edited_at, author:profiles(display_name, avatar_color), attachments:direct_message_attachments(id, file_name, file_path, mime_type, byte_size)').eq('thread_id', current.id).order('created_at');
+  if (!withAttachments.error) return withAttachments;
+  if (!isMissingFeature(withAttachments.error)) return withAttachments;
+  return client.from('direct_messages').select('id, body, author_id, created_at, author:profiles(display_name, avatar_color)').eq('thread_id', current.id).order('created_at');
+}
+async function hydrateAudioPlayers() {
+  const players = [...messagesEl.querySelectorAll('[data-audio-path]')];
+  await Promise.all(players.map(async item => {
+    const audio = item.querySelector('audio');
+    if (!audio || audio.src) return;
+    const { data, error } = await client.storage.from('teambox-files').createSignedUrl(decodeURIComponent(item.dataset.audioPath), 3600);
+    if (error) { console.warn('Could not load voice message', error); return; }
+    audio.src = data.signedUrl;
+  }));
 }
 async function renderMessages() {
   setHeader();
@@ -263,12 +294,13 @@ async function renderMessages() {
   }
   const result = current.kind === 'channel'
     ? await channelMessages()
-    : await client.from('direct_messages').select('id, body, created_at, author:profiles(display_name, avatar_color)').eq('thread_id', current.id).order('created_at');
+    : await directMessages();
   if (result.error) throw result.error;
   const data = result.data || [];
   messagesEl.innerHTML = data.length
     ? `<div class="date-divider">${fmt.format(new Date(data[0].created_at))}</div>${data.map(messageMarkup).join('')}`
     : '<div class="empty-messages">No messages yet. Start the conversation.</div>';
+  await hydrateAudioPlayers();
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 async function renderActivity() {
@@ -301,10 +333,13 @@ function subscribeToMessages() {
   if (activeRealtime) client.removeChannel(activeRealtime);
   if (!current) return;
   const table = current.kind === 'channel' ? 'messages' : 'direct_messages';
+  const attachmentTable = current.kind === 'channel' ? 'message_attachments' : 'direct_message_attachments';
   const field = current.kind === 'channel' ? 'channel_id' : 'thread_id';
   activeRealtime = client.channel(`${table}-${current.id}`)
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table, filter: `${field}=eq.${current.id}` }, () => {
+    .on('postgres_changes', { event: '*', schema: 'public', table, filter: `${field}=eq.${current.id}` }, () => {
       renderMessages().then(renderActivity).catch(showError);
+    }).on('postgres_changes', { event: '*', schema: 'public', table: attachmentTable }, () => {
+      renderMessages().catch(showError);
     }).subscribe();
 }
 async function start(sessionUser) {
@@ -339,22 +374,89 @@ async function sendMessage() {
     sendButton.disabled = false;
   }
 }
-async function uploadFile(file) {
-  if (!current || current.kind !== 'channel') throw new Error('Share files inside a team channel.');
+async function uploadFile(file, messageBody = `📎 ${file.name}`) {
+  if (!current) throw new Error('Choose a channel or private chat before sharing a file.');
   if (file.size > 25 * 1024 * 1024) throw new Error('This file exceeds the 25 MB workspace limit.');
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(-120) || 'file';
   const path = `${user.id}/${crypto.randomUUID()}-${safeName}`;
   const upload = await client.storage.from('teambox-files').upload(path, file, { contentType: file.type || 'application/octet-stream', upsert: false });
   if (upload.error) throw upload.error;
-  const inserted = await client.from('messages').insert({ channel_id: current.id, author_id: user.id, body: `📎 ${file.name}` }).select('id').single();
+  const table = current.kind === 'channel' ? 'messages' : 'direct_messages';
+  const messagePayload = current.kind === 'channel'
+    ? { channel_id: current.id, author_id: user.id, body: messageBody }
+    : { thread_id: current.id, author_id: user.id, body: messageBody };
+  const inserted = await client.from(table).insert(messagePayload).select('id').single();
   if (inserted.error) {
     await client.storage.from('teambox-files').remove([path]);
     throw inserted.error;
   }
-  const attachment = await client.from('message_attachments').insert({ message_id: inserted.data.id, file_name: file.name, file_path: path, mime_type: file.type || null, byte_size: file.size, created_by: user.id });
-  if (attachment.error) throw attachment.error;
+  const attachment = current.kind === 'channel'
+    ? await client.from('message_attachments').insert({ message_id: inserted.data.id, file_name: file.name, file_path: path, mime_type: file.type || null, byte_size: file.size, created_by: user.id })
+    : await client.from('direct_message_attachments').insert({ direct_message_id: inserted.data.id, thread_id: current.id, file_name: file.name, file_path: path, mime_type: file.type || null, byte_size: file.size, created_by: user.id });
+  if (attachment.error) {
+    await client.from(table).delete().eq('id', inserted.data.id).eq('author_id', user.id);
+    await client.storage.from('teambox-files').remove([path]);
+    throw attachment.error;
+  }
   await renderMessages();
   await renderActivity();
+}
+async function editMessage(id, existingBody) {
+  const nextBody = window.prompt('Edit your message', existingBody);
+  if (nextBody === null) return;
+  const body = nextBody.trim();
+  if (!body) { showToast('A message cannot be empty.'); return; }
+  const table = current?.kind === 'channel' ? 'messages' : 'direct_messages';
+  if (!table) return;
+  let result = await client.from(table).update({ body, edited_at: new Date().toISOString() }).eq('id', id).eq('author_id', user.id);
+  if (result.error && isMissingFeature(result.error)) result = await client.from(table).update({ body }).eq('id', id).eq('author_id', user.id);
+  if (result.error) throw result.error;
+  await renderMessages();
+  await renderActivity();
+}
+async function deleteMessage(id) {
+  if (!window.confirm('Delete this message permanently?')) return;
+  const table = current?.kind === 'channel' ? 'messages' : 'direct_messages';
+  if (!table) return;
+  const { error } = await client.from(table).delete().eq('id', id).eq('author_id', user.id);
+  if (error) throw error;
+  await renderMessages();
+  await renderActivity();
+}
+async function toggleAudioRecording() {
+  if (!current) { showToast('Choose a channel or private chat before recording.'); return; }
+  const button = $('#record-audio');
+  if (mediaRecorder?.state === 'recording') {
+    button.disabled = true;
+    mediaRecorder.stop();
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) throw new Error('Voice messages are not supported in this browser.');
+  recordingStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  audioChunks = [];
+  const recorder = new MediaRecorder(recordingStream);
+  mediaRecorder = recorder;
+  recorder.addEventListener('dataavailable', event => { if (event.data.size) audioChunks.push(event.data); });
+  recorder.addEventListener('stop', async () => {
+    const type = recorder.mimeType || 'audio/webm';
+    const blob = new Blob(audioChunks, { type });
+    recordingStream?.getTracks().forEach(track => track.stop());
+    recordingStream = null;
+    mediaRecorder = null;
+    audioChunks = [];
+    button.disabled = false;
+    button.classList.remove('recording');
+    button.title = 'Record voice message';
+    if (!blob.size) return;
+    try {
+      const extension = type.includes('mp4') ? 'm4a' : 'webm';
+      await uploadFile(new File([blob], `voice-message-${Date.now()}.${extension}`, { type }), '🎙 Voice message');
+      showToast('Voice message sent.');
+    } catch (error) { showError(error); }
+  });
+  recorder.start();
+  button.classList.add('recording');
+  button.title = 'Stop recording';
 }
 async function openAttachment(path) {
   const attachmentWindow = window.open('', '_blank');
@@ -634,7 +736,11 @@ $('#welcome-action').addEventListener('click', () => channelDialog.showModal());
 $('#create-channel').addEventListener('click', async event => {
   event.preventDefault();
   const slug = toSlug($('#channel-name').value);
-  if (!slug) return;
+  if (!slug) {
+    showToast('Add a channel name, or choose Cancel to close this panel.');
+    $('#channel-name').focus();
+    return;
+  }
   try {
     const invitedProfileIds = [...document.querySelectorAll('[data-channel-profile]:checked')].map(input => input.dataset.channelProfile);
     const description = $('#channel-desc').value.trim() || 'A new space for the team';
@@ -661,7 +767,10 @@ $('#create-channel').addEventListener('click', async event => {
 });
 async function openDirectPicker() {
   await renderTeam();
+  $('#direct-search').value = '';
+  renderDirectPicker();
   directDialog.showModal();
+  setTimeout(() => $('#direct-search').focus(), 0);
 }
 $('#new-message').addEventListener('click', () => openDirectPicker().catch(showError));
 $('#open-calendar').addEventListener('click', () => openCalendar().catch(showError));
@@ -691,13 +800,18 @@ $('#sign-out').addEventListener('click', async () => {
 });
 $('#emoji').addEventListener('click', () => { input.value += ' 😊'; input.focus(); });
 $('#attach').addEventListener('click', () => $('#file-picker').click());
+$('#record-audio').addEventListener('click', () => toggleAudioRecording().catch(showError));
 $('#file-picker').addEventListener('change', event => {
   const file = event.target.files?.[0];
   event.target.value = '';
   if (file) uploadFile(file).catch(showError);
 });
 messagesEl.addEventListener('click', event => {
+  const edit = event.target.closest('[data-edit-message]');
+  const remove = event.target.closest('[data-delete-message]');
   const button = event.target.closest('[data-file-path]');
+  if (edit) editMessage(edit.dataset.editMessage, decodeURIComponent(edit.dataset.messageBody || '')).catch(showError);
+  if (remove) deleteMessage(remove.dataset.deleteMessage).catch(showError);
   if (button) openAttachment(decodeURIComponent(button.dataset.filePath)).catch(showError);
 });
 $('#add-direct').addEventListener('click', () => openDirectPicker().catch(showError));
@@ -705,6 +819,7 @@ $('#member-picker').addEventListener('click', event => {
   const button = event.target.closest('[data-profile]');
   if (button) openDirect(button.dataset.profile).catch(showError);
 });
+$('#direct-search').addEventListener('input', renderDirectPicker);
 $('#show-members').addEventListener('click', () => renderCurrentMembers(true).catch(showError));
 $('#show-team').addEventListener('click', async () => { try { await renderTeam(); membersDialog.showModal(); } catch (error) { showError(error); } });
 $('#members-actions').addEventListener('click', async event => {
@@ -744,6 +859,13 @@ $('#search-input').addEventListener('keydown', event => { if (event.key === 'Ent
 $('#search-results').addEventListener('click', event => {
   const button = event.target.closest('[data-search-channel]');
   if (button) { searchDialog.close(); chooseChannel(Number(button.dataset.searchChannel)).catch(showError); }
+});
+
+document.querySelectorAll('[data-dialog-close]').forEach(button => {
+  button.addEventListener('click', () => button.closest('dialog')?.close());
+});
+document.querySelectorAll('dialog').forEach(dialog => {
+  dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
 });
 
 boot().catch(showError);
